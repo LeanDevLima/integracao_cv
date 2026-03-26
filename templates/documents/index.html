@@ -1,0 +1,105 @@
+{% extends 'base.html' %}
+{% block title %}Documentos Gerados — Job Assistant IA{% endblock %}
+{% block page_title %}<i class="bi bi-file-earmark-text-fill me-2 text-primary"></i> Documentos Gerados{% endblock %}
+
+{% block content %}
+<p class="text-muted mb-4">Todos os currículos e cartas de apresentação gerados pela IA.</p>
+
+<ul class="nav nav-tabs mb-4" id="docTabs">
+  <li class="nav-item">
+    <a class="nav-link active" data-bs-toggle="tab" href="#tab-all-curriculos">
+      <i class="bi bi-file-earmark-person me-1"></i>Currículos
+      <span class="badge bg-primary ms-1" id="total-curriculos">0</span>
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" data-bs-toggle="tab" href="#tab-all-covers">
+      <i class="bi bi-envelope-paper me-1"></i>Cover Letters
+      <span class="badge bg-success ms-1" id="total-covers">0</span>
+    </a>
+  </li>
+</ul>
+
+<div id="docs-loading" class="text-center py-5">
+  <div class="spinner-border text-primary"></div>
+</div>
+
+<div class="tab-content d-none" id="docsContent">
+  <div class="tab-pane fade show active" id="tab-all-curriculos">
+    <div id="curriculos-all-list"></div>
+  </div>
+  <div class="tab-pane fade" id="tab-all-covers">
+    <div id="covers-all-list"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/jobs.js') }}"></script>
+<script>
+async function loadAllDocs() {
+  // Carrega todas as vagas para depois buscar documentos de cada uma
+  try {
+    const resp  = await authFetch('/api/jobs/?per_page=100');
+    const data  = await resp.json();
+    const vagas = data.vagas || [];
+
+    let allCurriculos = [], allCovers = [];
+    for (const vaga of vagas) {
+      if (vaga.num_curriculos > 0 || vaga.num_cover_letters > 0) {
+        const dr = await authFetch(`/api/jobs/${vaga.id}/documents`);
+        const dd = await dr.json();
+        dd.curriculos.forEach(c => allCurriculos.push({...c, vaga}));
+        dd.cover_letters.forEach(c => allCovers.push({...c, vaga}));
+      }
+    }
+
+    document.getElementById('total-curriculos').textContent = allCurriculos.length;
+    document.getElementById('total-covers').textContent = allCovers.length;
+
+    const renderCard = (doc, tipo) => `
+    <div class="card card-glass mb-3">
+      <div class="card-header bg-transparent d-flex justify-content-between align-items-center">
+        <div>
+          <a href="/jobs/${doc.vaga.id}" class="fw-bold text-decoration-none">
+            ${escHtml(doc.vaga.titulo)}
+          </a>
+          <span class="text-muted mx-2">·</span>
+          <small class="text-muted">${escHtml(doc.vaga.empresa || 'Empresa não informada')}</small>
+        </div>
+        <div class="d-flex gap-2">
+          <small class="text-muted"><i class="bi bi-cpu me-1"></i>${doc.modelo_ia_utilizado || '—'}</small>
+          <small class="text-muted"><i class="bi bi-clock me-1"></i>${doc.tempo_inferencia ? doc.tempo_inferencia.toFixed(1)+'s' : '—'}</small>
+          <small class="text-muted">${formatDate(doc.created_at)}</small>
+          <button class="btn btn-sm btn-outline-secondary" onclick="copyDoc('adoc-${doc.id}-${tipo}')">
+            <i class="bi bi-clipboard"></i>
+          </button>
+        </div>
+      </div>
+      <div class="card-body">
+        <pre id="adoc-${doc.id}-${tipo}" class="doc-preview">${escHtml(doc.conteudo)}</pre>
+      </div>
+    </div>`;
+
+    document.getElementById('curriculos-all-list').innerHTML =
+      allCurriculos.length ? allCurriculos.map(c => renderCard(c, 'cur')).join('') :
+      '<p class="text-center text-muted py-5">Nenhum currículo gerado ainda.</p>';
+    document.getElementById('covers-all-list').innerHTML =
+      allCovers.length ? allCovers.map(c => renderCard(c, 'cov')).join('') :
+      '<p class="text-center text-muted py-5">Nenhuma cover letter gerada ainda.</p>';
+
+    document.getElementById('docs-loading').classList.add('d-none');
+    document.getElementById('docsContent').classList.remove('d-none');
+  } catch(e) {
+    document.getElementById('docs-loading').innerHTML = '<p class="text-danger text-center">Erro ao carregar documentos.</p>';
+  }
+}
+
+function copyDoc(id) {
+  const txt = document.getElementById(id)?.textContent || '';
+  navigator.clipboard.writeText(txt).then(() => showToast('Copiado para o clipboard!', 'success'));
+}
+
+loadAllDocs();
+</script>
+{% endblock %}

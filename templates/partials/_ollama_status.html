@@ -1,0 +1,56 @@
+<!--
+  partials/_ollama_status.html
+  Badge de status do Ollama com polling automático a cada 30 segundos.
+  Incluído na topbar pelo base.html.
+-->
+<div id="ollama-status-badge" class="ollama-badge ollama-checking" title="Verificando Ollama...">
+  <span class="ollama-dot"></span>
+  <span class="ollama-label">Ollama</span>
+  <span id="ollama-models-count" class="badge bg-secondary ms-1 d-none">0</span>
+</div>
+
+<script>
+(function() {
+  const badge    = document.getElementById('ollama-status-badge');
+  const dot      = badge.querySelector('.ollama-dot');
+  const label    = badge.querySelector('.ollama-label');
+  const countEl  = document.getElementById('ollama-models-count');
+
+  // Armazena modelos disponíveis globalmente para uso em outros scripts
+  window.ollamaModels = [];
+
+  function checkOllama() {
+    fetch('/api/ollama/status')
+      .then(r => r.json())
+      .then(data => {
+        window.ollamaOnline = data.online;
+        window.ollamaModels = (data.models || []).map(m => m.name);
+
+        if (data.online) {
+          badge.className = 'ollama-badge ollama-online';
+          label.textContent = 'Ollama Online';
+          const n = data.num_models || 0;
+          countEl.textContent = n;
+          countEl.className = 'badge bg-success ms-1';
+          badge.title = `${n} modelo(s): ${window.ollamaModels.join(', ')}`;
+        } else {
+          badge.className = 'ollama-badge ollama-offline';
+          label.textContent = 'Ollama Offline';
+          countEl.className = 'badge bg-danger ms-1 d-none';
+          badge.title = data.message || 'Ollama não está acessível';
+          window.ollamaModels = [];
+        }
+      })
+      .catch(() => {
+        badge.className = 'ollama-badge ollama-offline';
+        label.textContent = 'Ollama Offline';
+        window.ollamaOnline = false;
+        window.ollamaModels = [];
+      });
+  }
+
+  // Verifica ao carregar e a cada 30 segundos
+  checkOllama();
+  setInterval(checkOllama, 30000);
+})();
+</script>

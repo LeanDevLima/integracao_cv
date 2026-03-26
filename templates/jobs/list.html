@@ -1,0 +1,185 @@
+{% extends 'base.html' %}
+{% block title %}Minhas Vagas — Job Assistant IA{% endblock %}
+{% block page_title %}<i class="bi bi-briefcase-fill me-2 text-primary"></i> Minhas Vagas{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <p class="text-muted mb-0">Gerencie suas candidaturas e use a IA para personalizar documentos.</p>
+  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#novaVagaModal">
+    <i class="bi bi-plus-circle-fill me-2"></i>Nova Vaga
+  </button>
+</div>
+
+<!-- Filtro de status -->
+<div class="btn-group mb-4" role="group">
+  <button type="button" class="btn btn-sm btn-outline-secondary active" data-filter="all" onclick="filterVagas('all', this)">Todas</button>
+  <button type="button" class="btn btn-sm btn-outline-warning" data-filter="pendente" onclick="filterVagas('pendente', this)">Pendente</button>
+  <button type="button" class="btn btn-sm btn-outline-info"    data-filter="analisado" onclick="filterVagas('analisado', this)">Analisado</button>
+  <button type="button" class="btn btn-sm btn-outline-success" data-filter="gerado" onclick="filterVagas('gerado', this)">Gerado</button>
+</div>
+
+<div id="loading-vagas" class="text-center py-5">
+  <div class="spinner-border text-primary" role="status"></div>
+  <p class="mt-2 text-muted">Carregando vagas...</p>
+</div>
+
+<div id="vagas-container" class="d-none">
+  <div id="vagas-grid" class="row g-3"></div>
+  <div id="empty-state" class="d-none text-center py-5">
+    <i class="bi bi-briefcase fs-1 text-muted"></i>
+    <h5 class="mt-3 text-muted">Nenhuma vaga cadastrada</h5>
+    <p class="text-muted">Clique em "Nova Vaga" para começar.</p>
+  </div>
+</div>
+
+<!-- Modal: Nova Vaga -->
+<div class="modal fade" id="novaVagaModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header border-0">
+        <h5 class="modal-title"><i class="bi bi-briefcase-fill me-2 text-primary"></i>Nova Vaga</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="modal-alert" class="d-none"></div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Título da Vaga <span class="text-danger">*</span></label>
+          <input type="text" id="vaga-titulo" class="form-control" placeholder="Ex: Desenvolvedor Python Sênior" />
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Empresa</label>
+          <input type="text" id="vaga-empresa" class="form-control" placeholder="Nome da empresa" />
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Descrição Completa da Vaga <span class="text-danger">*</span></label>
+          <textarea id="vaga-descricao" class="form-control" rows="10"
+            placeholder="Cole aqui a descrição completa da vaga (quanto mais detalhada, melhor a análise da IA)..."></textarea>
+          <div class="form-text"><span id="char-count">0</span> caracteres</div>
+        </div>
+      </div>
+      <div class="modal-footer border-0">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="btnSalvarVaga">
+          <span id="spinnerSalvar" class="spinner-border spinner-border-sm me-2 d-none"></span>
+          <i class="bi bi-save-fill me-1"></i> Salvar Vaga
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/jobs.js') }}"></script>
+<script>
+  // Contador de caracteres
+  document.getElementById('vaga-descricao').addEventListener('input', function() {
+    document.getElementById('char-count').textContent = this.value.length;
+  });
+
+  let allVagas = [];
+  let currentFilter = 'all';
+
+  async function loadVagas() {
+    try {
+      const resp = await authFetch('/api/jobs/?per_page=50');
+      const data = await resp.json();
+      allVagas = data.vagas || [];
+      renderVagas(allVagas);
+      document.getElementById('loading-vagas').classList.add('d-none');
+      document.getElementById('vagas-container').classList.remove('d-none');
+    } catch(e) {
+      document.getElementById('loading-vagas').innerHTML =
+        '<p class="text-danger">Erro ao carregar vagas.</p>';
+    }
+  }
+
+  function filterVagas(status, btn) {
+    currentFilter = status;
+    document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const filtered = status === 'all' ? allVagas : allVagas.filter(v => v.status === status);
+    renderVagas(filtered);
+  }
+
+  function renderVagas(vagas) {
+    const grid = document.getElementById('vagas-grid');
+    const empty = document.getElementById('empty-state');
+    if (!vagas.length) {
+      grid.innerHTML = '';
+      empty.classList.remove('d-none');
+      return;
+    }
+    empty.classList.add('d-none');
+    grid.innerHTML = vagas.map(v => `
+      <div class="col-md-6 col-xl-4">
+        <div class="vaga-card card h-100" onclick="window.location.href='/jobs/${v.id}'">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <span class="badge ${statusBadge(v.status)}">${v.status}</span>
+              <span class="match-score-badge ${scoreColor(v.match_score)}">${v.match_score > 0 ? v.match_score + '%' : '--'}</span>
+            </div>
+            <h6 class="card-title fw-bold mb-1">${escHtml(v.titulo)}</h6>
+            <p class="text-muted small mb-2"><i class="bi bi-building me-1"></i>${escHtml(v.empresa || 'Empresa não informada')}</p>
+            <div class="keyword-pills mb-2">
+              ${(v.palavras_chave_extraidas || []).slice(0,4).map(k =>
+                `<span class="badge bg-secondary me-1">${escHtml(k)}</span>`).join('')}
+            </div>
+            <small class="text-muted">${formatDate(v.created_at)}</small>
+          </div>
+          <div class="card-footer bg-transparent border-0 d-flex gap-2">
+            <span class="text-muted small"><i class="bi bi-file-earmark-text me-1"></i>${v.num_curriculos} currículo(s)</span>
+            <span class="text-muted small ms-2"><i class="bi bi-envelope me-1"></i>${v.num_cover_letters} carta(s)</span>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function statusBadge(s) {
+    return {pendente:'bg-warning text-dark', analisado:'bg-info text-dark', gerado:'bg-success'}[s] || 'bg-secondary';
+  }
+  function scoreColor(s) {
+    if (!s) return 'score-na';
+    if (s >= 70) return 'score-high';
+    if (s >= 40) return 'score-mid';
+    return 'score-low';
+  }
+
+  document.getElementById('btnSalvarVaga').addEventListener('click', async function() {
+    const titulo    = document.getElementById('vaga-titulo').value.trim();
+    const empresa   = document.getElementById('vaga-empresa').value.trim();
+    const descricao = document.getElementById('vaga-descricao').value.trim();
+    const alertEl   = document.getElementById('modal-alert');
+    const spinner   = document.getElementById('spinnerSalvar');
+    this.disabled = true; spinner.classList.remove('d-none');
+    alertEl.className = 'd-none';
+    if (!titulo || descricao.length < 50) {
+      alertEl.className='alert alert-warning';
+      alertEl.textContent = 'Título obrigatório e descrição deve ter pelo menos 50 caracteres.';
+      this.disabled = false; spinner.classList.add('d-none'); return;
+    }
+    try {
+      const resp = await authFetch('/api/jobs/', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({titulo, empresa, descricao_completa: descricao})
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        bootstrap.Modal.getInstance(document.getElementById('novaVagaModal')).hide();
+        showToast('Vaga criada! Acesse para analisar com IA.', 'success');
+        window.location.href = `/jobs/${data.id}`;
+      } else {
+        alertEl.className='alert alert-danger'; alertEl.textContent = data.error || 'Erro.';
+      }
+    } catch(e) {
+      alertEl.className='alert alert-danger'; alertEl.textContent='Erro de conexão.';
+    } finally {
+      this.disabled = false; spinner.classList.add('d-none');
+    }
+  });
+
+  loadVagas();
+</script>
+{% endblock %}

@@ -1,0 +1,128 @@
+{% extends 'base.html' %}
+
+{% block title %}Criar Conta — Job Assistant IA{% endblock %}
+
+{% block public_content %}
+<div class="auth-wrapper">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <i class="bi bi-robot fs-1 text-primary"></i>
+      <h2 class="fw-bold mt-2">Criar Conta</h2>
+      <p class="text-muted">Comece a personalizar seu currículo com IA</p>
+    </div>
+
+    <div id="alert-box" class="d-none"></div>
+
+    <form id="registerForm" novalidate>
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Nome Completo</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-person-fill"></i></span>
+          <input type="text" id="nome" class="form-control" placeholder="Seu nome" required />
+        </div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label fw-semibold">E-mail</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-envelope-fill"></i></span>
+          <input type="email" id="email" class="form-control" placeholder="seu@email.com" required />
+        </div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Senha</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-lock-fill"></i></span>
+          <input type="password" id="senha" class="form-control" placeholder="Mínimo 6 caracteres" required />
+        </div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Modelo IA Preferido</label>
+        <select id="modelo" class="form-select">
+          <option value="llama3">llama3 (recomendado)</option>
+          <option value="mistral">mistral</option>
+          <option value="gemma:2b">gemma:2b (mais rápido)</option>
+        </select>
+      </div>
+      <div class="mb-4">
+        <label class="form-label fw-semibold">Currículo Base <span class="text-muted fw-normal">(opcional, PDF ou DOCX)</span></label>
+        <input type="file" id="curriculo" class="form-control" accept=".pdf,.docx" />
+        <div class="form-text">Você pode fazer upload depois em Perfil.</div>
+      </div>
+
+      <button type="submit" class="btn btn-primary w-100 py-2 fw-semibold" id="registerBtn">
+        <span id="spinner" class="spinner-border spinner-border-sm me-2 d-none"></span>
+        <i class="bi bi-person-plus-fill me-1"></i> Criar Conta
+      </button>
+    </form>
+
+    <hr class="my-4" />
+    <p class="text-center text-muted mb-0">
+      Já tem conta?
+      <a href="/login" class="text-primary fw-semibold text-decoration-none">Fazer login</a>
+    </p>
+  </div>
+</div>
+
+<script>
+document.getElementById('registerForm').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const btn     = document.getElementById('registerBtn');
+  const spinner = document.getElementById('spinner');
+  const alertBox = document.getElementById('alert-box');
+
+  btn.disabled = true;
+  spinner.classList.remove('d-none');
+  alertBox.className = 'd-none';
+
+  const email = document.getElementById('email').value.trim();
+  const nome  = document.getElementById('nome').value.trim();
+  const senha = document.getElementById('senha').value;
+  const modelo = document.getElementById('modelo').value;
+
+  try {
+    // Passo 1: registra o usuário
+    const resp = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ nome, email, senha, preferencia_modelo_ia: modelo })
+    });
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      alertBox.className = 'alert alert-danger rounded-3';
+      alertBox.innerHTML = `<i class="bi bi-exclamation-triangle-fill me-2"></i>${data.error || 'Erro ao criar conta.'}`;
+      return;
+    }
+
+    // Salva sessão
+    localStorage.setItem('access_token', data.access_token);
+    localStorage.setItem('usuario', JSON.stringify(data.usuario));
+    await fetch('/session/set', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+
+    // Passo 2: upload do currículo (se fornecido)
+    const file = document.getElementById('curriculo').files[0];
+    if (file) {
+      const formData = new FormData();
+      formData.append('arquivo', file);
+      await fetch('/api/auth/upload-resume', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${data.access_token}` },
+        body: formData
+      });
+    }
+
+    window.location.href = '/jobs';
+  } catch(err) {
+    alertBox.className = 'alert alert-danger rounded-3';
+    alertBox.textContent = 'Erro de conexão. Tente novamente.';
+  } finally {
+    btn.disabled = false;
+    spinner.classList.add('d-none');
+  }
+});
+</script>
+{% endblock %}

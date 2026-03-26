@@ -1,0 +1,347 @@
+{% extends 'base.html' %}
+{% block title %}Detalhe da Vaga — Job Assistant IA{% endblock %}
+{% block page_title %}<i class="bi bi-briefcase-fill me-2 text-primary"></i> <span id="page-vaga-titulo">Carregando vaga...</span>{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="/jobs" class="btn btn-sm btn-outline-secondary">
+    <i class="bi bi-arrow-left me-1"></i> Voltar
+  </a>
+</div>
+
+<div id="vaga-loading" class="text-center py-5">
+  <div class="spinner-border text-primary"></div>
+</div>
+
+<div id="vaga-content" class="d-none">
+  <div class="row g-4">
+    <!-- Painel esquerdo: info da vaga e ações IA -->
+    <div class="col-lg-4">
+      <div class="card card-glass mb-4">
+        <div class="card-body">
+          <h5 class="fw-bold" id="d-titulo">—</h5>
+          <p class="text-muted mb-1"><i class="bi bi-building me-1"></i><span id="d-empresa">—</span></p>
+          <span class="badge bg-secondary" id="d-status">—</span>
+        </div>
+      </div>
+
+      <!-- Match Score -->
+      <div class="card card-glass mb-4">
+        <div class="card-body text-center">
+          <div class="score-circle mb-2" id="score-circle">
+            <span id="d-score">—</span>
+          </div>
+          <small class="text-muted">Match Score</small>
+          <p class="text-muted small mt-2 mb-0" id="d-analise"></p>
+        </div>
+      </div>
+
+      <!-- Keywords -->
+      <div class="card card-glass mb-4">
+        <div class="card-header bg-transparent border-0 pb-0">
+          <strong><i class="bi bi-tags-fill me-1 text-primary"></i>Keywords Extraídas</strong>
+        </div>
+        <div class="card-body" id="d-keywords">
+          <span class="text-muted small">Ainda não analisado.</span>
+        </div>
+      </div>
+
+      <!-- Ações IA -->
+      <div class="card card-glass">
+        <div class="card-header bg-transparent border-0 pb-0">
+          <strong><i class="bi bi-robot me-1 text-primary"></i>Ações com IA</strong>
+        </div>
+        <div class="card-body d-grid gap-2">
+          <div class="mb-2">
+            <label class="form-label small text-muted mb-1">Modelo Ollama</label>
+            <select id="modeloSelect" class="form-select form-select-sm">
+              <option value="">Preferência do perfil</option>
+              <option value="llama3">llama3</option>
+              <option value="mistral">mistral</option>
+              <option value="gemma:2b">gemma:2b</option>
+            </select>
+          </div>
+
+          <button class="btn btn-outline-info" id="btnAnalisar">
+            <span id="spinnerAnalisar" class="spinner-border spinner-border-sm me-2 d-none"></span>
+            <i class="bi bi-cpu-fill me-1"></i>Analisar com IA
+          </button>
+
+          <button class="btn btn-outline-primary d-none" id="btnGerarCurriculo">
+            <span id="spinnerCurriculo" class="spinner-border spinner-border-sm me-2 d-none"></span>
+            <i class="bi bi-file-earmark-person-fill me-1"></i>Gerar Currículo
+          </button>
+
+          <button class="btn btn-outline-success d-none" id="btnGerarCover">
+            <span id="spinnerCover" class="spinner-border spinner-border-sm me-2 d-none"></span>
+            <i class="bi bi-envelope-paper-fill me-1"></i>Gerar Cover Letter
+          </button>
+
+          <div id="ai-msg" class="alert d-none mt-1 py-2 small"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Painel direito: descrição + documentos gerados -->
+    <div class="col-lg-8">
+      <!-- Tabs -->
+      <ul class="nav nav-tabs mb-3" id="vagaTabs">
+        <li class="nav-item">
+          <a class="nav-link active" data-bs-toggle="tab" href="#tab-descricao">
+            <i class="bi bi-file-text me-1"></i>Descrição
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" data-bs-toggle="tab" href="#tab-curriculos" id="tab-curriculos-link">
+            <i class="bi bi-file-earmark-person me-1"></i>Currículos
+            <span class="badge bg-primary ms-1" id="count-curriculos">0</span>
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" data-bs-toggle="tab" href="#tab-covers" id="tab-covers-link">
+            <i class="bi bi-envelope me-1"></i>Cover Letters
+            <span class="badge bg-success ms-1" id="count-covers">0</span>
+          </a>
+        </li>
+      </ul>
+
+      <div class="tab-content">
+        <div class="tab-pane fade show active" id="tab-descricao">
+          <div class="card card-glass">
+            <div class="card-body">
+              <pre id="d-descricao" class="job-description-pre"></pre>
+            </div>
+          </div>
+        </div>
+        <div class="tab-pane fade" id="tab-curriculos">
+          <div id="curriculos-list"></div>
+        </div>
+        <div class="tab-pane fade" id="tab-covers">
+          <div id="covers-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/jobs.js') }}"></script>
+<script>
+  const VAGA_ID = {{ vaga_id }};
+  let vagaData = null;
+
+  async function loadVaga() {
+    try {
+      const resp = await authFetch(`/api/jobs/${VAGA_ID}`);
+      if (!resp.ok) { showToast('Vaga não encontrada.', 'danger'); return; }
+      vagaData = await resp.json();
+      renderVagaDetalhe(vagaData);
+      document.getElementById('vaga-loading').classList.add('d-none');
+      document.getElementById('vaga-content').classList.remove('d-none');
+      loadDocuments();
+    } catch(e) {
+      document.getElementById('vaga-loading').innerHTML = '<p class="text-danger">Erro ao carregar vaga.</p>';
+    }
+  }
+
+  function renderVagaDetalhe(v) {
+    document.getElementById('page-vaga-titulo').textContent = v.titulo;
+    document.getElementById('d-titulo').textContent = v.titulo;
+    document.getElementById('d-empresa').textContent = v.empresa || 'Não informada';
+    document.getElementById('d-status').textContent = v.status;
+    document.getElementById('d-descricao').textContent = v.descricao_completa;
+
+    // Score
+    const score = v.match_score;
+    const scoreEl = document.getElementById('d-score');
+    const circleEl = document.getElementById('score-circle');
+    scoreEl.textContent = score > 0 ? `${score}%` : '—';
+    circleEl.className = `score-circle ${score >= 70 ? 'score-high' : score >= 40 ? 'score-mid' : 'score-low'}`;
+
+    if (v.analise_resumo) {
+      document.getElementById('d-analise').textContent = v.analise_resumo;
+    }
+
+    // Keywords
+    const kwContainer = document.getElementById('d-keywords');
+    const kws = v.palavras_chave_extraidas || [];
+    if (kws.length) {
+      kwContainer.innerHTML = kws.map(k =>
+        `<span class="badge bg-primary me-1 mb-1">${escHtml(k)}</span>`
+      ).join('');
+      document.getElementById('btnGerarCurriculo').classList.remove('d-none');
+      document.getElementById('btnGerarCover').classList.remove('d-none');
+    } else {
+      kwContainer.innerHTML = '<span class="text-muted small">Ainda não analisado.</span>';
+    }
+  }
+
+  async function loadDocuments() {
+    const resp = await authFetch(`/api/jobs/${VAGA_ID}/documents`);
+    const data = await resp.json();
+
+    document.getElementById('count-curriculos').textContent = data.curriculos.length;
+    document.getElementById('count-covers').textContent = data.cover_letters.length;
+
+    document.getElementById('curriculos-list').innerHTML =
+      data.curriculos.length
+        ? data.curriculos.map(c => renderDocCard(c, 'curriculo')).join('')
+        : '<p class="text-muted text-center py-4">Nenhum currículo gerado ainda.</p>';
+
+    document.getElementById('covers-list').innerHTML =
+      data.cover_letters.length
+        ? data.cover_letters.map(c => renderDocCard(c, 'cover')).join('')
+        : '<p class="text-muted text-center py-4">Nenhuma cover letter gerada ainda.</p>';
+  }
+
+  function renderDocCard(doc, tipo) {
+    return `
+    <div class="card card-glass mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center bg-transparent">
+        <div>
+          <span class="badge ${tipo === 'curriculo' ? 'bg-primary' : 'bg-success'} me-2">
+            ${tipo === 'curriculo' ? 'Currículo' : 'Cover Letter'}
+          </span>
+          <small class="text-muted">${formatDate(doc.created_at)}</small>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+          <small class="text-muted"><i class="bi bi-cpu me-1"></i>${doc.modelo_ia_utilizado || '—'}</small>
+          <small class="text-muted"><i class="bi bi-clock me-1"></i>${doc.tempo_inferencia ? doc.tempo_inferencia.toFixed(1)+'s' : '—'}</small>
+          <button class="btn btn-sm btn-outline-secondary" onclick="copyDoc('doc-${doc.id}')">
+            <i class="bi bi-clipboard"></i>
+          </button>
+        </div>
+      </div>
+      <div class="card-body">
+        <pre id="doc-${doc.id}" class="doc-preview">${escHtml(doc.conteudo)}</pre>
+      </div>
+    </div>`;
+  }
+
+  function copyDoc(id) {
+    const txt = document.getElementById(id)?.textContent || '';
+    navigator.clipboard.writeText(txt).then(() => showToast('Conteúdo copiado!', 'success'));
+  }
+
+  // ── Botão Analisar ──────────────────────────────────────────────────────────
+  document.getElementById('btnAnalisar').addEventListener('click', async function() {
+    const modelo = document.getElementById('modeloSelect').value;
+    const msg = document.getElementById('ai-msg');
+    setAiLoading('analisar', true);
+    msg.className = 'alert alert-info d-block py-2 small';
+    msg.innerHTML = '<i class="bi bi-cpu-fill me-1"></i>Analisando com IA (pode levar de 10 a 60s)...';
+    try {
+      const resp = await authFetch(`/api/jobs/${VAGA_ID}/analyze`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(modelo ? {modelo} : {})
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        vagaData = {...vagaData, ...data};
+        // Atualiza UI com os novos dados
+        const scoreEl = document.getElementById('d-score');
+        const circleEl = document.getElementById('score-circle');
+        scoreEl.textContent = `${data.match_score}%`;
+        circleEl.className = `score-circle ${data.match_score >= 70 ? 'score-high' : data.match_score >= 40 ? 'score-mid' : 'score-low'}`;
+        document.getElementById('d-analise').textContent = data.analysis || '';
+        const kwContainer = document.getElementById('d-keywords');
+        kwContainer.innerHTML = (data.keywords || []).map(k =>
+          `<span class="badge bg-primary me-1 mb-1">${escHtml(k)}</span>`).join('');
+        document.getElementById('btnGerarCurriculo').classList.remove('d-none');
+        document.getElementById('btnGerarCover').classList.remove('d-none');
+        msg.className = 'alert alert-success d-block py-2 small';
+        msg.innerHTML = `✅ Match: <strong>${data.match_score}%</strong> | Modelo: ${data.model} | ${data.tokens} tokens`;
+        showToast(`Análise concluída! Match: ${data.match_score}%`, 'success');
+      } else {
+        msg.className = 'alert alert-danger d-block py-2 small';
+        msg.textContent = data.error || 'Erro na análise.';
+      }
+    } catch(e) {
+      msg.className = 'alert alert-danger d-block py-2 small';
+      msg.textContent = 'Erro de conexão.';
+    } finally {
+      setAiLoading('analisar', false);
+    }
+  });
+
+  // ── Botão Gerar Currículo ───────────────────────────────────────────────────
+  document.getElementById('btnGerarCurriculo').addEventListener('click', async function() {
+    const modelo = document.getElementById('modeloSelect').value;
+    const msg = document.getElementById('ai-msg');
+    setAiLoading('curriculo', true);
+    msg.className = 'alert alert-info d-block py-2 small';
+    msg.innerHTML = '<i class="bi bi-cpu-fill me-1"></i>Gerando currículo personalizado (30s–2min)...';
+    try {
+      const resp = await authFetch(`/api/jobs/${VAGA_ID}/generate-resume`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(modelo ? {modelo} : {})
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        msg.className = 'alert alert-success d-block py-2 small';
+        msg.textContent = `✅ Currículo gerado! ${data.curriculo.tokens || ''} tokens`;
+        document.querySelector('[href="#tab-curriculos"]').click();
+        loadDocuments();
+        showToast('Currículo gerado com sucesso!', 'success');
+      } else {
+        msg.className = 'alert alert-danger d-block py-2 small';
+        msg.textContent = data.error || 'Erro na geração.';
+      }
+    } catch(e) {
+      msg.className = 'alert alert-danger d-block py-2 small';
+      msg.textContent = 'Erro de conexão.';
+    } finally {
+      setAiLoading('curriculo', false);
+    }
+  });
+
+  // ── Botão Gerar Cover Letter ────────────────────────────────────────────────
+  document.getElementById('btnGerarCover').addEventListener('click', async function() {
+    const modelo = document.getElementById('modeloSelect').value;
+    const msg = document.getElementById('ai-msg');
+    setAiLoading('cover', true);
+    msg.className = 'alert alert-info d-block py-2 small';
+    msg.innerHTML = '<i class="bi bi-cpu-fill me-1"></i>Gerando cover letter (30s–90s)...';
+    try {
+      const resp = await authFetch(`/api/jobs/${VAGA_ID}/generate-cover-letter`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(modelo ? {modelo} : {})
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        msg.className = 'alert alert-success d-block py-2 small';
+        msg.textContent = '✅ Cover letter gerada!';
+        document.querySelector('[href="#tab-covers"]').click();
+        loadDocuments();
+        showToast('Cover letter gerada com sucesso!', 'success');
+      } else {
+        msg.className = 'alert alert-danger d-block py-2 small';
+        msg.textContent = data.error || 'Erro na geração.';
+      }
+    } catch(e) {
+      msg.className = 'alert alert-danger d-block py-2 small';
+      msg.textContent = 'Erro de conexão.';
+    } finally {
+      setAiLoading('cover', false);
+    }
+  });
+
+  function setAiLoading(type, loading) {
+    const btns = {
+      analisar: {btn: 'btnAnalisar', spinner: 'spinnerAnalisar'},
+      curriculo: {btn: 'btnGerarCurriculo', spinner: 'spinnerCurriculo'},
+      cover: {btn: 'btnGerarCover', spinner: 'spinnerCover'},
+    };
+    Object.values(btns).forEach(({btn, spinner}) => {
+      document.getElementById(btn).disabled = loading;
+      document.getElementById(spinner).classList.toggle('d-none', !loading || spinner !== btns[type].spinner);
+    });
+  }
+
+  loadVaga();
+</script>
+{% endblock %}

@@ -1,0 +1,111 @@
+{% extends 'base.html' %}
+{% block title %}Meu Perfil — Job Assistant IA{% endblock %}
+{% block page_title %}<i class="bi bi-person-fill me-2 text-primary"></i> Meu Perfil{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-md-6">
+    <div class="card card-glass">
+      <div class="card-header bg-transparent border-0">
+        <strong><i class="bi bi-person-circle me-1 text-primary"></i>Dados Pessoais</strong>
+      </div>
+      <div class="card-body">
+        <div id="profile-alert" class="d-none mb-3"></div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Nome</label>
+          <input type="text" id="p-nome" class="form-control" value="{{ usuario.get('nome', '') }}" />
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">E-mail</label>
+          <input type="email" class="form-control" value="{{ usuario.get('email', '') }}" disabled />
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Modelo IA Preferido</label>
+          <select id="p-modelo" class="form-select">
+            <option value="llama3" {% if usuario.get('preferencia_modelo_ia') == 'llama3' %}selected{% endif %}>llama3</option>
+            <option value="mistral" {% if usuario.get('preferencia_modelo_ia') == 'mistral' %}selected{% endif %}>mistral</option>
+            <option value="gemma:2b" {% if usuario.get('preferencia_modelo_ia') == 'gemma:2b' %}selected{% endif %}>gemma:2b</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" id="btnSaveProfile">
+          <i class="bi bi-save me-1"></i>Salvar Alterações
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card card-glass">
+      <div class="card-header bg-transparent border-0">
+        <strong><i class="bi bi-file-earmark-arrow-up me-1 text-primary"></i>Currículo Base</strong>
+      </div>
+      <div class="card-body">
+        <p class="text-muted small">
+          O currículo base é usado pela IA para calcular o match score e personalizar documentos.
+          Aceita <strong>PDF</strong> ou <strong>DOCX</strong>.
+        </p>
+        {% if usuario.get('tem_curriculo') %}
+        <div class="alert alert-success py-2 mb-3">
+          <i class="bi bi-check-circle-fill me-2"></i>Currículo carregado no sistema.
+        </div>
+        {% endif %}
+        <div id="upload-alert" class="d-none mb-3"></div>
+        <input type="file" id="curriculo-file" class="form-control mb-3" accept=".pdf,.docx" />
+        <button class="btn btn-outline-primary w-100" id="btnUpload">
+          <span id="spinnerUpload" class="spinner-border spinner-border-sm me-2 d-none"></span>
+          <i class="bi bi-upload me-1"></i>Enviar Currículo
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/jobs.js') }}"></script>
+<script>
+document.getElementById('btnSaveProfile').addEventListener('click', async function() {
+  const alert = document.getElementById('profile-alert');
+  const resp = await authFetch('/api/auth/profile', {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      nome: document.getElementById('p-nome').value.trim(),
+      preferencia_modelo_ia: document.getElementById('p-modelo').value
+    })
+  });
+  const data = await resp.json();
+  if (resp.ok) {
+    alert.className = 'alert alert-success'; alert.textContent = 'Perfil atualizado!';
+    showToast('Perfil salvo!', 'success');
+    // Atualiza sessão
+    const s = JSON.parse(localStorage.getItem('usuario') || '{}');
+    localStorage.setItem('usuario', JSON.stringify({...s, ...data}));
+  } else {
+    alert.className = 'alert alert-danger'; alert.textContent = data.error || 'Erro.';
+  }
+  alert.classList.remove('d-none');
+});
+
+document.getElementById('btnUpload').addEventListener('click', async function() {
+  const file = document.getElementById('curriculo-file').files[0];
+  const alert = document.getElementById('upload-alert');
+  const spinner = document.getElementById('spinnerUpload');
+  if (!file) { alert.className='alert alert-warning'; alert.textContent='Selecione um arquivo.'; alert.classList.remove('d-none'); return; }
+  this.disabled = true; spinner.classList.remove('d-none'); alert.className = 'd-none';
+  const fd = new FormData();
+  fd.append('arquivo', file);
+  const resp = await authFetch('/api/auth/upload-resume', { method:'POST', body: fd });
+  const data = await resp.json();
+  if (resp.ok) {
+    alert.className = 'alert alert-success';
+    alert.innerHTML = `<i class="bi bi-check-circle me-2"></i>${data.num_chars?.toLocaleString()} caracteres extraídos com sucesso!`;
+    showToast('Currículo enviado!', 'success');
+  } else {
+    alert.className = 'alert alert-danger'; alert.textContent = data.error || 'Erro.';
+  }
+  alert.classList.remove('d-none');
+  this.disabled = false; spinner.classList.add('d-none');
+});
+</script>
+{% endblock %}

@@ -1,0 +1,108 @@
+{% extends 'base.html' %}
+
+{% block title %}Login — Job Assistant IA{% endblock %}
+
+{% block public_content %}
+<div class="auth-wrapper">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <i class="bi bi-robot fs-1 text-primary"></i>
+      <h2 class="fw-bold mt-2">Job Assistant IA</h2>
+      <p class="text-muted">Personalize seu currículo com IA local</p>
+    </div>
+
+    <div id="alert-box" class="d-none"></div>
+
+    <form id="loginForm" novalidate>
+      <div class="mb-3">
+        <label class="form-label fw-semibold">E-mail</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-envelope-fill"></i></span>
+          <input type="email" id="email" class="form-control" placeholder="seu@email.com" required />
+        </div>
+      </div>
+      <div class="mb-4">
+        <label class="form-label fw-semibold">Senha</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-lock-fill"></i></span>
+          <input type="password" id="senha" class="form-control" placeholder="Sua senha" required />
+          <button class="btn btn-outline-secondary" type="button" id="togglePwd">
+            <i class="bi bi-eye-fill"></i>
+          </button>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary w-100 py-2 fw-semibold" id="loginBtn">
+        <span id="loginSpinner" class="spinner-border spinner-border-sm me-2 d-none"></span>
+        <i class="bi bi-box-arrow-in-right me-1"></i> Entrar
+      </button>
+    </form>
+
+    <hr class="my-4" />
+
+    <p class="text-center text-muted mb-0">
+      Não tem conta?
+      <a href="/register" class="text-primary fw-semibold text-decoration-none">Criar conta gratuita</a>
+    </p>
+  </div>
+</div>
+
+<script>
+document.getElementById('togglePwd').addEventListener('click', function() {
+  const pwd = document.getElementById('senha');
+  const icon = this.querySelector('i');
+  if (pwd.type === 'password') {
+    pwd.type = 'text';
+    icon.className = 'bi bi-eye-slash-fill';
+  } else {
+    pwd.type = 'password';
+    icon.className = 'bi bi-eye-fill';
+  }
+});
+
+document.getElementById('loginForm').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const btn = document.getElementById('loginBtn');
+  const spinner = document.getElementById('loginSpinner');
+  const alertBox = document.getElementById('alert-box');
+
+  btn.disabled = true;
+  spinner.classList.remove('d-none');
+  alertBox.className = 'd-none';
+
+  try {
+    const resp = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        email: document.getElementById('email').value.trim(),
+        senha: document.getElementById('senha').value,
+      })
+    });
+    const data = await resp.json();
+
+    if (resp.ok) {
+      // Salva token no localStorage E na sessão Flask
+      localStorage.setItem('access_token', data.access_token);
+      localStorage.setItem('usuario', JSON.stringify(data.usuario));
+      // Persiste na sessão Flask para proteção server-side nas páginas Jinja2
+      await fetch('/session/set', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+      });
+      window.location.href = '/jobs';
+    } else {
+      alertBox.className = 'alert alert-danger rounded-3';
+      alertBox.innerHTML = `<i class="bi bi-exclamation-triangle-fill me-2"></i>${data.error || 'Erro ao fazer login.'}`;
+    }
+  } catch(err) {
+    alertBox.className = 'alert alert-danger rounded-3';
+    alertBox.textContent = 'Erro de conexão. Tente novamente.';
+  } finally {
+    btn.disabled = false;
+    spinner.classList.add('d-none');
+  }
+});
+</script>
+{% endblock %}
