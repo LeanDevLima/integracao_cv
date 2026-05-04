@@ -13,8 +13,8 @@ from flask_jwt_extended import (
     create_access_token, jwt_required, get_jwt_identity
 )
 
-from extensions import bcrypt, db
-from models.repositories import UsuarioRepository
+from extensions import bcrypt, db, limiter
+from models.repositories import UsuarioRepository, BaseResumeRepository
 from services.resume_processor import process_upload
 
 auth_ns = Namespace('auth', description='Autenticação e gestão de usuários', path='/auth')
@@ -87,6 +87,7 @@ class Register(Resource):
 
 @auth_ns.route('/login')
 class Login(Resource):
+    @limiter.limit("10 per minute")
     @auth_ns.expect(login_model, validate=True)
     @auth_ns.response(200, 'Login realizado', token_response)
     @auth_ns.response(401, 'Credenciais inválidas', error_model)
@@ -159,11 +160,15 @@ class UploadResume(Resource):
         if not result['success']:
             return {'error': result['error']}, 400
 
-        # Atualiza o usuário com o caminho e texto do currículo
-        UsuarioRepository.update(
-            usuario,
-            curriculo_base_path=result['filepath'],
-            curriculo_base_texto=result['texto'],
+        # Cria um novo BaseResume
+        is_first = len(BaseResumeRepository.list_by_user(user_id)) == 0
+        BaseResumeRepository.create(
+            usuario_id=user_id,
+            file_name=result['filename'],
+            original_file_name=result.get('original_file_name'),
+            file_path=result['filepath'],
+            conteudo_texto=result['texto'],
+            is_active=is_first  # Se for o primeiro, já fica como ativo
         )
 
         return {
@@ -171,3 +176,88 @@ class UploadResume(Resource):
             'filename': result['filename'],
             'num_chars': result['num_chars'],
         }, 200
+
+
+@auth_ns.route('/resumes')
+class ResumesList(Resource):
+    @jwt_required()
+    @auth_ns.response(200, 'Lista de currículos base')
+    def get(self):
+        """Lista todos os currículos enviados pelo usuário."""
+        user_id = int(get_jwt_identity())
+        resumes = BaseResumeRepository.list_by_user(user_id)
+        return [r.to_dict() for r in resumes], 200
+
+
+@auth_ns.route('/resumes/<int:resume_id>/active')
+class ResumeActive(Resource):
+    @jwt_required()
+    @auth_ns.response(200, 'Currículo definido como ativo')
+    @auth_ns.response(404, 'Currículo não encontrado', error_model)
+    def put(self, resume_id):
+        """Define o currículo selecionado como o ativo para uso da IA."""
+        user_id = int(get_jwt_identity())
+        resume = BaseResumeRepository.get_by_id(resume_id)
+        
+        if not resume or resume.usuario_id != user_id:
+            return {'error': 'Currículo não encontrado.'}, 404
+            
+        BaseResumeRepository.set_active(user_id, resume_id)
+        return {'message': f'Currículo {resume.file_name} definido como ativo.'}, 200
+
+@auth_ns.route('/resumes/<int:resume_id>')
+class ResumeDelete(Resource):
+    @jwt_required()
+    @auth_ns.response(200, 'Currículo excluído com sucesso')
+    @auth_ns.response(404, 'Currículo não encontrado', error_model)
+    def delete(self, resume_id):
+        """Exclui um currículo base do banco e do disco."""
+        user_id = int(get_jwt_identity())
+        resume = BaseResumeRepository.get_by_id(resume_id)
+        
+        if not resume or resume.usuario_id != user_id:
+            return {'error': 'Currículo não encontrado.'}, 404
+            
+        was_active = resume.is_active
+        
+        # Remove do disco
+        import os
+        if os.path.exists(resume.file_path):
+            try:
+                os.remove(resume.file_path)
+            except Exception as e:
+                pass # Se falhar, segue com a exclusão do banco
+                
+        BaseResumeRepository.delete(resume)
+        
+        # Se era o ativo, tenta definir o mais recente como ativo
+        if was_active:
+            resumes = BaseResumeRepository.list_by_user(user_id)
+            if resumes:
+                BaseResumeRepository.set_active(user_id, resumes[0].id)
+                
+        return {'message': 'Currículo excluído com sucesso.'}, 200
+
+@auth_ns.route('/resumes/<int:resume_id>/download')
+class ResumeDownload(Resource):
+    @jwt_required()
+    @auth_ns.response(200, 'Arquivo do currículo')
+    @auth_ns.response(404, 'Currículo não encontrado', error_model)
+    def get(self, resume_id):
+        """Baixa o arquivo físico do currículo base."""
+        user_id = int(get_jwt_identity())
+        resume = BaseResumeRepository.get_by_id(resume_id)
+        
+        if not resume or resume.usuario_id != user_id:
+            return {'error': 'Currículo não encontrado.'}, 404
+            
+        import os
+        from flask import send_file
+        if not os.path.exists(resume.file_path):
+            return {'error': 'Arquivo não encontrado no servidor.'}, 404
+            
+        return send_file(
+            resume.file_path,
+            as_attachment=True,
+            download_name=resume.original_file_name or resume.file_name
+        )

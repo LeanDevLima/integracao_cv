@@ -4,8 +4,9 @@ Cada repositório encapsula as operações de CRUD para sua entidade,
 mantendo a lógica de negócio separada das rotas.
 """
 from extensions import db
-from .models import Usuario, Vaga, CurriculoGerado, CoverLetterGerada, Keyword, ProcessingLog
+from .models import Usuario, Vaga, CurriculoGerado, CoverLetterGerada, Keyword, ProcessingLog, BaseResume
 import json
+from typing import Optional, List
 
 
 # ─── UsuarioRepository ───────────────────────────────────────────────────────
@@ -19,11 +20,11 @@ class UsuarioRepository:
         return usuario
 
     @staticmethod
-    def get_by_id(user_id: int) -> Usuario | None:
+    def get_by_id(user_id: int) -> Optional[Usuario]:
         return db.session.get(Usuario, user_id)
 
     @staticmethod
-    def get_by_email(email: str) -> Usuario | None:
+    def get_by_email(email: str) -> Optional[Usuario]:
         return Usuario.query.filter_by(email=email).first()
 
     @staticmethod
@@ -44,6 +45,59 @@ class UsuarioRepository:
         return Usuario.query.filter_by(email=email).count() > 0
 
 
+# ─── BaseResumeRepository ──────────────────────────────────────────────────────
+class BaseResumeRepository:
+
+    @staticmethod
+    def create(usuario_id: int, file_name: str, file_path: str, conteudo_texto: str, is_active: bool = False, original_file_name: str = None, **kwargs) -> BaseResume:
+        resume = BaseResume(
+            usuario_id=usuario_id,
+            file_name=file_name,
+            original_file_name=original_file_name,
+            file_path=file_path,
+            conteudo_texto=conteudo_texto,
+            is_active=is_active,
+            **kwargs
+        )
+        db.session.add(resume)
+        db.session.commit()
+        return resume
+
+    @staticmethod
+    def get_by_id(resume_id: int) -> Optional[BaseResume]:
+        return db.session.get(BaseResume, resume_id)
+
+    @staticmethod
+    def list_by_user(usuario_id: int) -> List[BaseResume]:
+        return (BaseResume.query
+                .filter_by(usuario_id=usuario_id)
+                .order_by(BaseResume.upload_date.desc())
+                .all())
+
+    @staticmethod
+    def get_active_by_user(usuario_id: int) -> Optional[BaseResume]:
+        return BaseResume.query.filter_by(usuario_id=usuario_id, is_active=True).first()
+
+    @staticmethod
+    def set_active(usuario_id: int, resume_id: int) -> Optional[BaseResume]:
+        """Define o currículo com `resume_id` como ativo, desmarcando os demais."""
+        resumes = BaseResumeRepository.list_by_user(usuario_id)
+        target = None
+        for r in resumes:
+            if r.id == resume_id:
+                r.is_active = True
+                target = r
+            else:
+                r.is_active = False
+        db.session.commit()
+        return target
+
+    @staticmethod
+    def delete(resume: BaseResume) -> None:
+        db.session.delete(resume)
+        db.session.commit()
+
+
 # ─── VagaRepository ──────────────────────────────────────────────────────────
 class VagaRepository:
 
@@ -60,7 +114,7 @@ class VagaRepository:
         return vaga
 
     @staticmethod
-    def get_by_id(vaga_id: int) -> Vaga | None:
+    def get_by_id(vaga_id: int) -> Optional[Vaga]:
         return db.session.get(Vaga, vaga_id)
 
     @staticmethod
@@ -218,9 +272,10 @@ class ProcessingLogRepository:
         return log
 
     @staticmethod
-    def list_by_user(usuario_id: int, limit: int = 50) -> list[ProcessingLog]:
+    def list_by_user(usuario_id: int, limit: int = 50) -> List[ProcessingLog]:
         return (ProcessingLog.query
                 .filter_by(usuario_id=usuario_id)
                 .order_by(ProcessingLog.created_at.desc())
                 .limit(limit)
+                .yield_per(100)
                 .all())

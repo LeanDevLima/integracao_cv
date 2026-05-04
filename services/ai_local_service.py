@@ -9,13 +9,18 @@ Fluxo de integração com Ollama:
 Os prompts são construídos para forçar o modelo a devolver respostas
 estruturadas e consistentes, especialmente JSON puro na extração de keywords.
 """
+
 import json
 import time
 import re
 from typing import Optional
 
-from services.ollama_client import ollama_client
 from models.repositories import ProcessingLogRepository
+from utils.security import PromptSanitizer
+import logging
+import gc
+
+logger = logging.getLogger(__name__)
 
 # ─── Prompts de Sistema ───────────────────────────────────────────────────────
 
@@ -109,268 +114,312 @@ Atenciosamente,
 
 # ─── Funções principais ───────────────────────────────────────────────────────
 
-def extract_keywords(job_description: str, base_resume_text: str,
-                     model: str, usuario_id: Optional[int] = None) -> dict:
-    """
-    Usa IA para extrair keywords e calcular o match score entre a vaga e o currículo.
 
-    Args:
-        job_description:  Descrição completa da vaga
-        base_resume_text: Texto extraído do currículo do usuário
-        model:            Modelo Ollama a usar (ex: 'llama3')
-        usuario_id:       ID do usuário (para log de telemetria)
+class AILocalService:
+    def __init__(self, ollama_client, log_repository=ProcessingLogRepository):
+        self.client = ollama_client
+        self.log_repo = log_repository
 
-    Returns:
-        {
-          'success': True,
-          'keywords': ['python', 'flask', ...],
-          'match_score': 78,
-          'required_skills': [...],
-          'missing_skills': [...],
-          'analysis': 'Texto de análise...',
-          'model': 'llama3',
-          'tokens': 450,
-          'elapsed': 8.3,
-        }
-    """
-    # Constrói o prompt do usuário com os dados reais
-    has_resume = bool(base_resume_text and base_resume_text.strip())
+    def extract_keywords(
+        self,
+        job_description: str,
+        base_resume_text: str,
+        model: str,
+        usuario_id: Optional[int] = None,
+    ) -> dict:
+        """
+        Usa IA para extrair keywords e calcular o match score entre a vaga e o currículo.
 
-    prompt = f"""Analise a vaga abaixo e o currículo do candidato.
+        Args:
+            job_description:  Descrição completa da vaga
+            base_resume_text: Texto extraído do currículo do usuário
+            model:            Modelo Ollama a usar (ex: 'llama3')
+            usuario_id:       ID do usuário (para log de telemetria)
 
-=== DESCRIÇÃO DA VAGA ===
-{job_description[:3000]}
+        Returns:
+            {
+              'success': True,
+              'keywords': ['python', 'flask', ...],
+              'match_score': 78,
+              'required_skills': [...],
+              'missing_skills': [...],
+              'analysis': 'Texto de análise...',
+              'model': 'llama3',
+              'tokens': 450,
+              'elapsed': 8.3,
+            }
+        """
+        # Constrói o prompt do usuário com os dados reais
+        has_resume = bool(base_resume_text and base_resume_text.strip())
 
-=== CURRÍCULO DO CANDIDATO ===
-{base_resume_text[:2000] if has_resume else 'Currículo não fornecido. Analise apenas a vaga e retorne match_score: 0.'}
+        prompt = f"""Analise a vaga abaixo e o currículo do candidato.
 
-Retorne APENAS o JSON conforme especificado."""
+    === DESCRIÇÃO DA VAGA ===
+    {PromptSanitizer.envelop_input(job_description[:3000])}
 
-    start = time.time()
-    result = ollama_client.generate(
-        model=model,
-        prompt=prompt,
-        system=SYSTEM_KEYWORD_EXTRACTION,
-        temperature=0.1,  # Baixa temperatura para respostas mais consistentes
-    )
-    elapsed_ms = int((time.time() - start) * 1000)
+    === CURRÍCULO DO CANDIDATO ===
+    {base_resume_text[:2000] if has_resume else 'Currículo não fornecido. Analise apenas a vaga e retorne match_score: 0.'}
 
-    if not result['success']:
-        # Registra falha no log de telemetria
+    Retorne APENAS o JSON conforme especificado."""
+
+        start = time.time()
+        result = self.client.generate(
+            model=model,
+            prompt=prompt,
+            system=SYSTEM_KEYWORD_EXTRACTION,
+            temperature=0.1,  # Baixa temperatura para respostas mais consistentes
+        )
+        elapsed_ms = int((time.time() - start) * 1000)
+        del prompt
+        if base_resume_text:
+            del base_resume_text
+        gc.collect()
+        del prompt
+        if base_resume_text:
+            del base_resume_text
+        gc.collect()
+        del prompt
+        if base_resume_text:
+            del base_resume_text
+        gc.collect()
+
+        if not result["success"]:
+            # Registra falha no log de telemetria
+            if usuario_id:
+                self.log_repo.create(
+                    usuario_id=usuario_id,
+                    tipo_operacao="keyword_extraction",
+                    modelo=model,
+                    sucesso=False,
+                    erro_msg=result.get("error", ""),
+                )
+            return {"success": False, "error": result.get("error", "Erro na IA")}
+
+        # Tenta parsear o JSON da resposta
+        parsed = self._parse_json_response(result["response"])
+        if not parsed:
+            # Extração de fallback: retorna keywords vazias e score 0
+            parsed = {
+                "keywords": [],
+                "match_score": 0,
+                "required_skills": [],
+                "missing_skills": [],
+                "analysis": "Não foi possível analisar automaticamente.",
+            }
+
+        # Registra sucesso na telemetria
         if usuario_id:
-            ProcessingLogRepository.create(
+            self.log_repo.create(
                 usuario_id=usuario_id,
-                tipo_operacao='keyword_extraction',
+                tipo_operacao="keyword_extraction",
                 modelo=model,
-                sucesso=False,
-                erro_msg=result.get('error', ''),
+                tokens_usados=result.get("tokens", 0),
+                tempo_ms=elapsed_ms,
+                sucesso=True,
             )
-        return {'success': False, 'error': result.get('error', 'Erro na IA')}
 
-    # Tenta parsear o JSON da resposta
-    parsed = _parse_json_response(result['response'])
-    if not parsed:
-        # Extração de fallback: retorna keywords vazias e score 0
-        parsed = {
-            'keywords': [],
-            'match_score': 0,
-            'required_skills': [],
-            'missing_skills': [],
-            'analysis': 'Não foi possível analisar automaticamente.'
+        return {
+            "success": True,
+            "keywords": parsed.get("keywords", []),
+            "match_score": self._clamp_score(parsed.get("match_score", 0)),
+            "required_skills": parsed.get("required_skills", []),
+            "missing_skills": parsed.get("missing_skills", []),
+            "analysis": parsed.get("analysis", ""),
+            "model": result.get("model", model),
+            "tokens": result.get("tokens", 0),
+            "elapsed": result.get("elapsed", 0),
         }
 
-    # Registra sucesso na telemetria
-    if usuario_id:
-        ProcessingLogRepository.create(
-            usuario_id=usuario_id,
-            tipo_operacao='keyword_extraction',
-            modelo=model,
-            tokens_usados=result.get('tokens', 0),
-            tempo_ms=elapsed_ms,
-            sucesso=True,
+    def generate_resume(
+        self,
+        base_resume_text: str,
+        job_description: str,
+        job_title: str,
+        company: str,
+        keywords: list,
+        model: str,
+        usuario_id: Optional[int] = None,
+    ) -> dict:
+        """
+        Gera um currículo personalizado para a vaga usando IA local.
+
+        Args:
+            base_resume_text: Texto do currículo base do usuário
+            job_description:  Descrição da vaga
+            job_title:        Título da vaga
+            company:          Nome da empresa
+            keywords:         Lista de keywords extraídas da vaga
+            model:            Modelo Ollama
+            usuario_id:       Para telemetria
+
+        Returns:
+            {'success': True, 'conteudo': '...', 'tokens': N, 'elapsed': X.X}
+        """
+        if not base_resume_text:
+            return {
+                "success": False,
+                "error": "Currículo base não encontrado. Faça o upload do seu currículo primeiro.",
+            }
+
+        keywords_str = ", ".join(keywords[:20]) if keywords else "não identificadas"
+
+        prompt = f"""Personalize o currículo abaixo para a seguinte vaga.
+
+    === VAGA TARGET ===
+    Posição: {job_title}
+    Empresa: {company or 'Não informada'}
+    Keywords importantes da vaga: {keywords_str}
+
+    === DESCRIÇÃO DA VAGA ===
+    {PromptSanitizer.envelop_input(job_description[:2500])}
+
+    === CURRÍCULO ORIGINAL DO CANDIDATO ===
+    {base_resume_text[:3000]}
+
+    Gere o currículo personalizado em Markdown seguindo as diretrizes do sistema."""
+
+        start = time.time()
+        result = self.client.generate(
+            model=model,
+            prompt=prompt,
+            system=SYSTEM_RESUME_GENERATION,
+            temperature=0.6,
         )
+        elapsed_ms = int((time.time() - start) * 1000)
 
-    return {
-        'success': True,
-        'keywords':       parsed.get('keywords', []),
-        'match_score':    _clamp_score(parsed.get('match_score', 0)),
-        'required_skills': parsed.get('required_skills', []),
-        'missing_skills': parsed.get('missing_skills', []),
-        'analysis':       parsed.get('analysis', ''),
-        'model':          result.get('model', model),
-        'tokens':         result.get('tokens', 0),
-        'elapsed':        result.get('elapsed', 0),
-    }
+        success = result.get("success", False)
 
+        # Registra telemetria
+        if usuario_id:
+            self.log_repo.create(
+                usuario_id=usuario_id,
+                tipo_operacao="resume_generation",
+                modelo=model,
+                tokens_usados=result.get("tokens", 0),
+                tempo_ms=elapsed_ms,
+                sucesso=success,
+                erro_msg=result.get("error") if not success else None,
+            )
 
-def generate_resume(base_resume_text: str, job_description: str,
-                    job_title: str, company: str, keywords: list,
-                    model: str, usuario_id: Optional[int] = None) -> dict:
-    """
-    Gera um currículo personalizado para a vaga usando IA local.
+        if not success:
+            return {
+                "success": False,
+                "error": result.get("error", "Erro na geração do currículo"),
+            }
 
-    Args:
-        base_resume_text: Texto do currículo base do usuário
-        job_description:  Descrição da vaga
-        job_title:        Título da vaga
-        company:          Nome da empresa
-        keywords:         Lista de keywords extraídas da vaga
-        model:            Modelo Ollama
-        usuario_id:       Para telemetria
+        return {
+            "success": True,
+            "conteudo": result["response"],
+            "tokens": result.get("tokens", 0),
+            "elapsed": result.get("elapsed", 0),
+            "model": result.get("model", model),
+        }
 
-    Returns:
-        {'success': True, 'conteudo': '...', 'tokens': N, 'elapsed': X.X}
-    """
-    if not base_resume_text:
-        return {'success': False, 'error': 'Currículo base não encontrado. Faça o upload do seu currículo primeiro.'}
+    def generate_cover_letter(
+        self,
+        base_resume_text: str,
+        job_description: str,
+        job_title: str,
+        company: str,
+        model: str,
+        usuario_id: Optional[int] = None,
+    ) -> dict:
+        """
+        Gera uma carta de apresentação profissional para a vaga.
 
-    keywords_str = ', '.join(keywords[:20]) if keywords else 'não identificadas'
+        Returns:
+            {'success': True, 'conteudo': '...', 'tokens': N, 'elapsed': X.X}
+        """
+        if not base_resume_text:
+            return {
+                "success": False,
+                "error": "Currículo base não encontrado. Faça o upload do seu currículo primeiro.",
+            }
 
-    prompt = f"""Personalize o currículo abaixo para a seguinte vaga.
+        prompt = f"""Crie uma carta de apresentação para a vaga abaixo.
 
-=== VAGA TARGET ===
-Posição: {job_title}
-Empresa: {company or 'Não informada'}
-Keywords importantes da vaga: {keywords_str}
+    === VAGA ===
+    Posição: {job_title}
+    Empresa: {company or 'Não informada'}
 
-=== DESCRIÇÃO DA VAGA ===
-{job_description[:2500]}
+    === DESCRIÇÃO DA VAGA ===
+    {PromptSanitizer.envelop_input(job_description[:2000])}
 
-=== CURRÍCULO ORIGINAL DO CANDIDATO ===
-{base_resume_text[:3000]}
+    === INFORMAÇÕES DO CANDIDATO (do currículo) ===
+    {base_resume_text[:2000]}
 
-Gere o currículo personalizado em Markdown seguindo as diretrizes do sistema."""
+    Crie a carta seguindo as diretrizes do sistema."""
 
-    start = time.time()
-    result = ollama_client.generate(
-        model=model,
-        prompt=prompt,
-        system=SYSTEM_RESUME_GENERATION,
-        temperature=0.6,
-    )
-    elapsed_ms = int((time.time() - start) * 1000)
-
-    success = result.get('success', False)
-
-    # Registra telemetria
-    if usuario_id:
-        ProcessingLogRepository.create(
-            usuario_id=usuario_id,
-            tipo_operacao='resume_generation',
-            modelo=model,
-            tokens_usados=result.get('tokens', 0),
-            tempo_ms=elapsed_ms,
-            sucesso=success,
-            erro_msg=result.get('error') if not success else None,
+        start = time.time()
+        result = self.client.generate(
+            model=model,
+            prompt=prompt,
+            system=SYSTEM_COVER_LETTER,
+            temperature=0.75,
         )
+        elapsed_ms = int((time.time() - start) * 1000)
 
-    if not success:
-        return {'success': False, 'error': result.get('error', 'Erro na geração do currículo')}
+        success = result.get("success", False)
 
-    return {
-        'success': True,
-        'conteudo': result['response'],
-        'tokens':   result.get('tokens', 0),
-        'elapsed':  result.get('elapsed', 0),
-        'model':    result.get('model', model),
-    }
+        if usuario_id:
+            self.log_repo.create(
+                usuario_id=usuario_id,
+                tipo_operacao="cover_letter",
+                modelo=model,
+                tokens_usados=result.get("tokens", 0),
+                tempo_ms=elapsed_ms,
+                sucesso=success,
+                erro_msg=result.get("error") if not success else None,
+            )
 
+        if not success:
+            return {
+                "success": False,
+                "error": result.get("error", "Erro na geração da cover letter"),
+            }
 
-def generate_cover_letter(base_resume_text: str, job_description: str,
-                          job_title: str, company: str,
-                          model: str, usuario_id: Optional[int] = None) -> dict:
-    """
-    Gera uma carta de apresentação profissional para a vaga.
+        return {
+            "success": True,
+            "conteudo": result["response"],
+            "tokens": result.get("tokens", 0),
+            "elapsed": result.get("elapsed", 0),
+            "model": result.get("model", model),
+        }
 
-    Returns:
-        {'success': True, 'conteudo': '...', 'tokens': N, 'elapsed': X.X}
-    """
-    if not base_resume_text:
-        return {'success': False, 'error': 'Currículo base não encontrado. Faça o upload do seu currículo primeiro.'}
+    # ─── Utilitários internos ─────────────────────────────────────────────────────
 
-    prompt = f"""Crie uma carta de apresentação para a vaga abaixo.
+    def _parse_json_response(self, text: str) -> Optional[dict]:
+        """
+        Extrai e parseia JSON de uma resposta de LLM.
+        LLMs às vezes envolvem o JSON em markdown code blocks — remove esses wrappers.
+        """
+        if not text:
+            return None
 
-=== VAGA ===
-Posição: {job_title}
-Empresa: {company or 'Não informada'}
+        # Remove blocos de markdown se existirem
+        text = re.sub(r"```json\s*", "", text)
+        text = re.sub(r"```\s*", "", text)
+        text = text.strip()
 
-=== DESCRIÇÃO DA VAGA ===
-{job_description[:2000]}
-
-=== INFORMAÇÕES DO CANDIDATO (do currículo) ===
-{base_resume_text[:2000]}
-
-Crie a carta seguindo as diretrizes do sistema."""
-
-    start = time.time()
-    result = ollama_client.generate(
-        model=model,
-        prompt=prompt,
-        system=SYSTEM_COVER_LETTER,
-        temperature=0.75,
-    )
-    elapsed_ms = int((time.time() - start) * 1000)
-
-    success = result.get('success', False)
-
-    if usuario_id:
-        ProcessingLogRepository.create(
-            usuario_id=usuario_id,
-            tipo_operacao='cover_letter',
-            modelo=model,
-            tokens_usados=result.get('tokens', 0),
-            tempo_ms=elapsed_ms,
-            sucesso=success,
-            erro_msg=result.get('error') if not success else None,
-        )
-
-    if not success:
-        return {'success': False, 'error': result.get('error', 'Erro na geração da cover letter')}
-
-    return {
-        'success': True,
-        'conteudo': result['response'],
-        'tokens':   result.get('tokens', 0),
-        'elapsed':  result.get('elapsed', 0),
-        'model':    result.get('model', model),
-    }
-
-
-# ─── Utilitários internos ─────────────────────────────────────────────────────
-
-def _parse_json_response(text: str) -> Optional[dict]:
-    """
-    Extrai e parseia JSON de uma resposta de LLM.
-    LLMs às vezes envolvem o JSON em markdown code blocks — remove esses wrappers.
-    """
-    if not text:
-        return None
-
-    # Remove blocos de markdown se existirem
-    text = re.sub(r'```json\s*', '', text)
-    text = re.sub(r'```\s*', '', text)
-    text = text.strip()
-
-    # Tenta parsear diretamente
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    # Tenta extrair o primeiro objeto JSON válido da string
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    if match:
+        # Tenta parsear diretamente
         try:
-            return json.loads(match.group())
+            return json.loads(text)
         except json.JSONDecodeError:
             pass
 
-    return None
+        # Tenta extrair o primeiro objeto JSON válido da string
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
 
+        return None
 
-def _clamp_score(score) -> float:
-    """Garante que o score esteja entre 0 e 100."""
-    try:
-        return round(min(100.0, max(0.0, float(score))), 1)
-    except (TypeError, ValueError):
-        return 0.0
+    def _clamp_score(self, score) -> float:
+        """Garante que o score esteja entre 0 e 100."""
+        try:
+            return round(min(100.0, max(0.0, float(score))), 1)
+        except (TypeError, ValueError):
+            return 0.0

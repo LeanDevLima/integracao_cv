@@ -31,6 +31,11 @@
 
     <ul class="nav flex-column sidebar-nav mt-3">
       <li class="nav-item">
+        <a class="nav-link {% if request.path == '/profile' %}active{% endif %}" href="/profile">
+          <i class="bi bi-person-fill me-2"></i> Perfil
+        </a>
+      </li>
+      <li class="nav-item">
         <a class="nav-link {% if request.path == '/jobs' %}active{% endif %}" href="/jobs">
           <i class="bi bi-briefcase-fill me-2"></i> Vagas
         </a>
@@ -38,11 +43,6 @@
       <li class="nav-item">
         <a class="nav-link {% if request.path == '/documents' %}active{% endif %}" href="/documents">
           <i class="bi bi-file-earmark-text-fill me-2"></i> Documentos
-        </a>
-      </li>
-      <li class="nav-item">
-        <a class="nav-link {% if request.path == '/profile' %}active{% endif %}" href="/profile">
-          <i class="bi bi-person-fill me-2"></i> Perfil
         </a>
       </li>
     </ul>

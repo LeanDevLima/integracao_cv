@@ -35,8 +35,8 @@ def allowed_file(filename: str) -> bool:
 
 def extract_text_from_pdf(filepath: str) -> str:
     """
-    Extrai texto de um arquivo PDF usando PyPDF2.
-    Percorre todas as páginas e concatena o texto.
+    Extrai texto de um arquivo PDF usando PyPDF2 com baixo consumo de memória.
+    Deleta o objeto da página (GC) logo após a extração.
     """
     if not HAS_PDF:
         raise ImportError("PyPDF2 não está instalado. Execute: pip install PyPDF2")
@@ -45,10 +45,11 @@ def extract_text_from_pdf(filepath: str) -> str:
     try:
         with open(filepath, 'rb') as f:
             reader = PyPDF2.PdfReader(f)
-            for page_num, page in enumerate(reader.pages):
+            for page in reader.pages:
                 page_text = page.extract_text()
                 if page_text:
                     text_parts.append(page_text)
+                del page  # Otimização: forçar liberação de memória
     except Exception as e:
         raise ValueError(f"Erro ao ler PDF: {str(e)}")
 
@@ -153,6 +154,7 @@ def process_upload(file: FileStorage) -> dict:
     return {
         'success': True,
         'filename': unique_name,
+        'original_file_name': file.filename,
         'filepath': filepath,
         'texto': texto,
         'num_chars': len(texto),

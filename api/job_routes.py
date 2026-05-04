@@ -15,11 +15,17 @@ from flask import request, current_app
 from flask_restx import Namespace, Resource, fields
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
+from extensions import limiter
+
 from models.repositories import (
     VagaRepository, UsuarioRepository,
-    CurriculoGeradoRepository, CoverLetterGeradaRepository, KeywordRepository
+    CurriculoGeradoRepository, CoverLetterGeradaRepository, KeywordRepository,
+    BaseResumeRepository
 )
-from services import ai_local_service
+from services.ai_local_service import AILocalService
+from services.ollama_client import ollama_client
+
+ai_local_service = AILocalService(ollama_client=ollama_client)
 
 jobs_ns = Namespace('jobs', description='Gestão de vagas e geração de documentos com IA', path='/jobs')
 
@@ -28,6 +34,8 @@ vaga_create_model = jobs_ns.model('VagaCreate', {
     'titulo':             fields.String(required=True, example='Desenvolvedor Python Sênior'),
     'empresa':            fields.String(example='TechCorp Ltda'),
     'descricao_completa': fields.String(required=True, example='Buscamos desenvolvedor Python com experiência em Flask...'),
+    'pais':               fields.String(example='Brasil'),
+    'idioma_geracao':     fields.String(example='pt-BR', description='Idioma da carta e currículo. Ex: en-US, pt-BR, fr-FR'),
 })
 
 vaga_response = jobs_ns.model('VagaResponse', {
@@ -95,17 +103,25 @@ class VagaList(Resource):
         titulo = data.get('titulo', '').strip()
         descricao = data.get('descricao_completa', '').strip()
         empresa = data.get('empresa', '').strip()
+        pais = data.get('pais', '').strip()
+        idioma = data.get('idioma_geracao', 'pt-BR').strip()
 
         if not titulo or not descricao:
             return {'error': 'Título e descrição são obrigatórios.'}, 400
         if len(descricao) < 50:
             return {'error': 'Descrição muito curta. Forneça a descrição completa da vaga.'}, 400
 
+        active_resume = BaseResumeRepository.get_active_by_user(int(user_id))
+        resume_nome = (active_resume.original_file_name or active_resume.file_name) if active_resume else None
+
         vaga = VagaRepository.create(
             usuario_id=int(user_id),
             titulo=titulo,
             descricao_completa=descricao,
             empresa=empresa,
+            pais=pais,
+            idioma_geracao=idioma,
+            curriculo_base_utilizado_nome=resume_nome
         )
         return vaga.to_dict(), 201
 
@@ -144,6 +160,7 @@ class VagaDetail(Resource):
 @jobs_ns.route('/<int:vaga_id>/analyze')
 class AnalisarVaga(Resource):
     @jwt_required()
+    @limiter.limit("5 per minute")
     @jobs_ns.expect(generate_model)
     @jobs_ns.response(200, 'Análise concluída')
     @jobs_ns.response(404, 'Vaga não encontrada', error_model)
@@ -169,10 +186,13 @@ class AnalisarVaga(Resource):
         data = request.get_json(silent=True) or {}
         modelo = _resolve_model(data, usuario)
 
+        active_resume = BaseResumeRepository.get_active_by_user(int(user_id))
+        base_text = active_resume.conteudo_texto if active_resume else ''
+
         # Chama o serviço de IA para extração de keywords
         result = ai_local_service.extract_keywords(
             job_description=vaga.descricao_completa,
-            base_resume_text=usuario.curriculo_base_texto or '',
+            base_resume_text=base_text,
             model=modelo,
             usuario_id=int(user_id),
         )
@@ -212,6 +232,7 @@ class AnalisarVaga(Resource):
 @jobs_ns.route('/<int:vaga_id>/generate-resume')
 class GerarCurriculo(Resource):
     @jwt_required()
+    @limiter.limit("5 per minute")
     @jobs_ns.expect(generate_model)
     @jobs_ns.response(201, 'Currículo gerado com sucesso')
     @jobs_ns.response(400, 'Currículo base não encontrado', error_model)
@@ -232,8 +253,9 @@ class GerarCurriculo(Resource):
         if not vaga or vaga.usuario_id != int(user_id):
             return {'error': 'Vaga não encontrada.'}, 404
 
-        if not usuario.curriculo_base_texto:
-            return {'error': 'Você ainda não enviou seu currículo base. Acesse Perfil > Upload Currículo.'}, 400
+        active_resume = BaseResumeRepository.get_active_by_user(int(user_id))
+        if not active_resume:
+            return {'error': 'Você não possui um currículo base ativo. Acesse Perfil para enviar um.'}, 400
 
         data = request.get_json(silent=True) or {}
         modelo = _resolve_model(data, usuario)
@@ -246,13 +268,14 @@ class GerarCurriculo(Resource):
 
         # Gera o currículo personalizado
         result = ai_local_service.generate_resume(
-            base_resume_text=usuario.curriculo_base_texto,
+            base_resume_text=active_resume.conteudo_texto,
             job_description=vaga.descricao_completa,
             job_title=vaga.titulo,
             company=vaga.empresa or '',
             keywords=keywords,
             model=modelo,
             usuario_id=int(user_id),
+            idioma_geracao=vaga.idioma_geracao
         )
 
         if not result['success']:
@@ -281,6 +304,7 @@ class GerarCurriculo(Resource):
 @jobs_ns.route('/<int:vaga_id>/generate-cover-letter')
 class GerarCoverLetter(Resource):
     @jwt_required()
+    @limiter.limit("5 per minute")
     @jobs_ns.expect(generate_model)
     @jobs_ns.response(201, 'Cover letter gerada com sucesso')
     @jobs_ns.response(400, 'Currículo base não encontrado', error_model)
@@ -299,19 +323,21 @@ class GerarCoverLetter(Resource):
         if not vaga or vaga.usuario_id != int(user_id):
             return {'error': 'Vaga não encontrada.'}, 404
 
-        if not usuario.curriculo_base_texto:
-            return {'error': 'Você ainda não enviou seu currículo base. Acesse Perfil > Upload Currículo.'}, 400
+        active_resume = BaseResumeRepository.get_active_by_user(int(user_id))
+        if not active_resume:
+            return {'error': 'Você não possui um currículo base ativo. Acesse Perfil para enviar um.'}, 400
 
         data = request.get_json(silent=True) or {}
         modelo = _resolve_model(data, usuario)
 
         result = ai_local_service.generate_cover_letter(
-            base_resume_text=usuario.curriculo_base_texto,
+            base_resume_text=active_resume.conteudo_texto,
             job_description=vaga.descricao_completa,
             job_title=vaga.titulo,
             company=vaga.empresa or '',
             model=modelo,
             usuario_id=int(user_id),
+            idioma_geracao=vaga.idioma_geracao
         )
 
         if not result['success']:

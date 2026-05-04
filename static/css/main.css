@@ -329,6 +329,11 @@ html, body {
   box-shadow: 0 0 0 3px var(--primary-glow);
 }
 
+.form-select option {
+  background-color: var(--bg-1);
+  color: var(--text-1);
+}
+
 .form-control::placeholder { color: var(--text-2); }
 
 .input-group-text {

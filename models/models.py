@@ -27,29 +27,56 @@ class Usuario(db.Model):
     nome                 = db.Column(db.String(200),  nullable=False)
     email                = db.Column(db.String(200),  unique=True, nullable=False, index=True)
     senha_hash           = db.Column(db.String(255),  nullable=False)
-    curriculo_base_path  = db.Column(db.String(500))   # caminho do arquivo enviado
-    curriculo_base_texto = db.Column(db.Text)          # texto extraído do PDF/DOCX
     preferencia_modelo_ia = db.Column(db.String(100), default='llama3')
     created_at           = db.Column(db.DateTime,    default=datetime.utcnow)
 
     # Relacionamentos
+    base_resumes      = db.relationship('BaseResume',       backref='usuario', lazy=True, cascade='all, delete-orphan')
     vagas             = db.relationship('Vaga',             backref='usuario', lazy=True, cascade='all, delete-orphan')
     curriculos_gerados = db.relationship('CurriculoGerado', backref='usuario', lazy=True)
     cover_letters     = db.relationship('CoverLetterGerada', backref='usuario', lazy=True)
     processing_logs   = db.relationship('ProcessingLog',    backref='usuario', lazy=True)
 
     def to_dict(self):
+        active_resume = next((r for r in self.base_resumes if r.is_active), None)
         return {
             'id':                   self.id,
             'nome':                 self.nome,
             'email':                self.email,
             'preferencia_modelo_ia': self.preferencia_modelo_ia,
-            'tem_curriculo':        bool(self.curriculo_base_path),
+            'tem_curriculo':        bool(active_resume),
             'created_at':           self.created_at.isoformat() if self.created_at else None,
         }
 
     def __repr__(self):
         return f'<Usuario {self.email}>'
+
+
+# ─── BaseResume ──────────────────────────────────────────────────────────────
+class BaseResume(db.Model):
+    __tablename__ = 'base_resumes'
+
+    id             = db.Column(db.Integer,    primary_key=True)
+    usuario_id     = db.Column(db.Integer,    db.ForeignKey('usuarios.id'), nullable=False)
+    file_name      = db.Column(db.String(255), nullable=False)
+    original_file_name = db.Column(db.String(255))
+    file_path      = db.Column(db.String(500), nullable=False)
+    conteudo_texto = db.Column(db.Text,       nullable=False)
+    is_active      = db.Column(db.Boolean,    default=False)
+    upload_date    = db.Column(db.DateTime,   default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id':                 self.id,
+            'usuario_id':         self.usuario_id,
+            'file_name':          self.file_name,
+            'original_file_name': self.original_file_name,
+            'is_active':          self.is_active,
+            'upload_date':        self.upload_date.isoformat() if self.upload_date else None,
+        }
+
+    def __repr__(self):
+        return f'<BaseResume {self.file_name}>'
 
 
 # ─── Vaga ────────────────────────────────────────────────────────────────────
@@ -61,6 +88,9 @@ class Vaga(db.Model):
     titulo                  = db.Column(db.String(300), nullable=False)
     empresa                 = db.Column(db.String(300))
     descricao_completa      = db.Column(db.Text,       nullable=False)
+    pais                    = db.Column(db.String(100))
+    idioma_geracao          = db.Column(db.String(50), default='pt-BR')
+    curriculo_base_utilizado_nome = db.Column(db.String(255))
     palavras_chave_extraidas = db.Column(db.Text)      # JSON string com lista de keywords
     match_score             = db.Column(db.Float,      default=0.0)
     status                  = db.Column(db.String(50), default='pendente')  # pendente | analisado | gerado
@@ -88,6 +118,9 @@ class Vaga(db.Model):
             'titulo':                  self.titulo,
             'empresa':                 self.empresa,
             'descricao_completa':      self.descricao_completa,
+            'pais':                    self.pais,
+            'idioma_geracao':          self.idioma_geracao,
+            'curriculo_base_utilizado_nome': self.curriculo_base_utilizado_nome,
             'palavras_chave_extraidas': kw_list,
             'match_score':             self.match_score,
             'status':                  self.status,

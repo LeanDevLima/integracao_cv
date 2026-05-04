@@ -35,6 +35,14 @@
           <p class="text-muted small mt-2 mb-0" id="d-analise"></p>
         </div>
       </div>
+      <!-- Info do Currículo Base -->
+      <div class="alert alert-info py-2 small d-flex align-items-center mb-4">
+        <i class="bi bi-info-circle-fill me-2 fs-5"></i>
+        <div>
+          <strong>📄 Currículo Base Utilizado:</strong> 
+          <span id="d-resume-base" title="Para alterar o currículo base para futuras gerações, acesse seu Perfil.">Carregando...</span>
+        </div>
+      </div>
 
       <!-- Keywords -->
       <div class="card card-glass mb-4">
@@ -151,6 +159,9 @@
     document.getElementById('d-empresa').textContent = v.empresa || 'Não informada';
     document.getElementById('d-status').textContent = v.status;
     document.getElementById('d-descricao').textContent = v.descricao_completa;
+    
+    const rBase = document.getElementById('d-resume-base');
+    if(rBase) rBase.textContent = v.curriculo_base_utilizado_nome || 'Não registrado';
 
     // Score
     const score = v.match_score;
@@ -196,6 +207,7 @@
   }
 
   function renderDocCard(doc, tipo) {
+    const downloadEndpoint = tipo === 'curriculo' ? `/api/resumes/${doc.id}/download` : `/api/cover-letters/${doc.id}/download`;
     return `
     <div class="card card-glass mb-3">
       <div class="card-header d-flex justify-content-between align-items-center bg-transparent">
@@ -208,8 +220,14 @@
         <div class="d-flex gap-2 align-items-center">
           <small class="text-muted"><i class="bi bi-cpu me-1"></i>${doc.modelo_ia_utilizado || '—'}</small>
           <small class="text-muted"><i class="bi bi-clock me-1"></i>${doc.tempo_inferencia ? doc.tempo_inferencia.toFixed(1)+'s' : '—'}</small>
-          <button class="btn btn-sm btn-outline-secondary" onclick="copyDoc('doc-${doc.id}')">
+          <button class="btn btn-sm btn-outline-secondary" onclick="copyDoc('doc-${doc.id}')" title="Copiar Texto">
             <i class="bi bi-clipboard"></i>
+          </button>
+          <button class="btn btn-sm btn-outline-danger" onclick="downloadPdf('${downloadEndpoint}', 'Documento_${doc.id}.pdf')" title="Baixar PDF">
+            <i class="bi bi-file-earmark-pdf"></i> PDF
+          </button>
+          <button class="btn btn-sm btn-outline-danger" onclick="deleteGeneratedDoc(${doc.id}, '${tipo}')" title="Excluir">
+            <i class="bi bi-trash"></i>
           </button>
         </div>
       </div>
@@ -222,6 +240,51 @@
   function copyDoc(id) {
     const txt = document.getElementById(id)?.textContent || '';
     navigator.clipboard.writeText(txt).then(() => showToast('Conteúdo copiado!', 'success'));
+  }
+
+  async function deleteGeneratedDoc(id, tipo) {
+    if (!confirm("Tem certeza que deseja excluir este documento?")) return;
+    const endpoint = tipo === 'curriculo' ? `/api/resumes/${id}` : `/api/cover-letters/${id}`;
+    
+    try {
+      const resp = await authFetch(endpoint, { method: 'DELETE' });
+      if (resp.ok) {
+        showToast('Documento excluído com sucesso!', 'success');
+        loadDocuments();
+      } else {
+        const data = await resp.json();
+        showToast(data.error || 'Erro ao excluir documento.', 'danger');
+      }
+    } catch(e) {
+      showToast('Erro de conexão.', 'danger');
+    }
+  }
+
+  async function downloadPdf(endpoint, filename) {
+    showToast('Gerando PDF...', 'info');
+    try {
+      const resp = await authFetch(endpoint);
+      if (!resp.ok) {
+        showToast('Erro ao baixar o PDF.', 'danger');
+        return;
+      }
+      const blob = await resp.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      // Define filename
+      const contentDisposition = resp.headers.get('Content-Disposition');
+      if (contentDisposition && contentDisposition.includes('filename=')) {
+        filename = contentDisposition.split('filename=')[1].replace(/"/g, '');
+      }
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch(e) {
+      showToast('Erro de conexão ao baixar o PDF.', 'danger');
+    }
   }
 
   // ── Botão Analisar ──────────────────────────────────────────────────────────
